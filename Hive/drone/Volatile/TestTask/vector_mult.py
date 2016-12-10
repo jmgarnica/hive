@@ -1,6 +1,5 @@
-﻿import tasksupport
+﻿import drone.tasksupport as tasksupport
 import asyncio
-import Volatile.TestTask.a
 
 def vector_serializer(vector : (int, list, list)) -> str:
     return "{0}|{1}|{2}".format(vector[0],

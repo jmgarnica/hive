@@ -25,7 +25,7 @@
     <Compile Include="drone\drone.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="drone\Volatile\TestTask\a.py">
+    <Compile Include="drone\__init__.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Hive.py" />
@@ -35,9 +35,13 @@
     <Compile Include="drone\Volatile\TestTask\vector_mult.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="hivenode.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="overlord\overlord.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="overlord\__init__.py" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="drone\" />
