@@ -1,59 +1,54 @@
-﻿import xmlrpc
+﻿import rpcserver
 from threading import Thread
-import socket
 from struct import pack, unpack
 
 class HiveNode:
     
-    max_attemps = 10
+    max_attempts = 10
     time_to_wait = 0.5
 
-    def __init__(self, rpc_port : int, *, enterpoint : (str, int) = None, broadcastport : int = None, server : bool = False):
-        self.rpc_server = xmlrpc.server.SimpleXMLRPCServer(("localhost", rpc_port))
+    def __init__(self, rpc_port : int, broadcastport : int):
+        self.rpc_server = rpcserver.HiveXMLRPCServer(("localhost", rpc_port))
+        self.rpc_server.register_function(self.Hive_node_test)
+
         self._rpc_thread = Thread(target = self.rpc_server.serve_forever)
+        self._rpc_thread.start()
 
-        self._broadcast_port = broadcastport
-        self._current_serv = enterpoint if not server else find_my_ip()
-        self._is_server = server
+        self.broadcastport = broadcastport
+        self.udp_server = None
+        self._udp_server_thread = None
 
-    def find_my_ip(self):
-        pass
+    def Hive_node_test(self):
 
-    def _propagate_address(self):
+        return "ACK"
 
-        HOST = ''
-        PORT = self._broadcast_port
-        ADDR = HOST, PORT
-        BUFSIZ = 100
+    def propagate_address(self, addr):
 
-        bcast_sock = socket.socket(type = socket.SOCK_DGRAM)
-        bcast_sock.bind(ADDR)
-        bcast_sock.settimeout(self.time_to_wait)
+        def propagation():
+            rpcserver.PropagationHandler.setdata(addr)
+            self.udp_server.serve_forever()
 
-        def propagation_loop():
-            while True:
-                if(self._current_serv):
-                    try:
-                        data, naddr = bcast_sock.recvfrom(BUFSIZ)
-                        print(data)
-                        data = pack('<i{0}si'.format(len(self._current_serv[0])),len(self._current_serv[0]), *self._current_serv)
-                        bcast_sock.sendto(data, naddr)
-                    except socket.timeout:
-                        pass
+        if self.udp_server != None:
+            self.udp_server.shutdown()
+            self.udp_server = None
 
-        self._propagate_address_thread = Thread(target = propagation_loop)
-        self._propagate_address_thread.start()
+        self.udp_server = rpcserver.UDPServer(("localhost", self.broadcastport), rpcserver.PropagationHandler)
+        Thread(target = propagation, daemon = True).start()
 
     def _locate_server(self):
         HOST = '<broadcast>'
-        PORT = self._broadcast_port
+        PORT = self.broadcastport
         ADDR = HOST,PORT
         BUFSIZ = 100
+
+        if self.udp_server != None:
+            self.udp_server.shutdown()
+            self.udp_server = None
 
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(self.time_to_wait)
         s.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
-        for x in range(self.max_attemps): 
+        for x in range(self.max_attempts): 
             s.sendto('heeelp i need a server',ADDR)
             try:
                 data, naddr = s.recvfrom(BUFSIZ)
@@ -62,30 +57,50 @@ class HiveNode:
             except socket.timeout:
                 pass
 
-
-
-    def get_proxy(self, client : (str, int) = None):
-        if not client:
+    def get_proxy(self, target : (str, int) = None):
+        if not target:
             if self._current_serv:
-                client = self._try_connect(self._current_serv)
-                if client:
-                    return client
-            self._locate_server()
-            client = self._try_connect(self._current_serv)
-            if client:
-                return client
+                target = self._try_connect(self._current_serv)
+                if target:
+                    return target
+            self._locate_server() #TODO: make a ban list for bad broadcast responses
+            target = self._try_connect(self._current_serv)
+            if target:
+                self.propagate_address(self._current_serv)
+                return target
 
         else:
-            client = self._try_connect(client)
-            if client:
-                return client
+            target = self._try_connect(target)
+            if target:
+                return target
 
         raise Exception
 
+    def _test_connection(self, proxy):
+        try:
+            result = proxy.Hive_node_test()
+            if result == "ACK":
+                return True
+            
+            return False
+
+        except:
+            return False
+
     def _try_connect(self, addr):
-        for x in range(self.max_attemps):
+        for x in range(self.max_attempts):
             try:
                 client = xmlrpc.client.ServerProxy("http://{0}:{0}".format(addr[0], addr[1]))
-                return client
+                if self.test_connection(client):
+                    return client
             except:
                 pass
+
+    def set_current_server(self, addr):
+        self._current_serv = addr
+        if addr:
+            if self._try_connect(addr):
+                self.propagate_address(addr)
+        elif self.udp_server != None:
+            self.udp_server.shutdown()
+            self.udp_server = None

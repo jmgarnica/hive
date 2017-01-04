@@ -1,4 +1,4 @@
-﻿import drone.tasksupport as tasksupport
+﻿import tasksupport as tasksupport
 import asyncio
 
 def vector_serializer(vector : (int, list, list)) -> str:

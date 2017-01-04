@@ -1,10 +1,10 @@
-from threading import Thread, Condition, RLock, Lock
+﻿from threading import Thread, Condition, RLock, Lock
 from xmlrpc import server as xmlrpcserver, client as xmlrpcclient
 from collections import namedtuple
 from os import getcwd
 import runpy
 import queue
-import asyncio
+#import asyncio
 import hivenode
 
 class Overlord(hivenode.HiveNode):

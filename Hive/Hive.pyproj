@@ -22,32 +22,29 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="drone\drone.py">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="drone\__init__.py">
+    <Compile Include="drone.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Hive.py" />
-    <Compile Include="drone\tasksupport.py">
+    <Compile Include="rpcserver.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="drone\Volatile\TestTask\vector_mult.py">
+    <Compile Include="tasksupport.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="Volatile\TestTask\vector_mult.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="hivenode.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="overlord\overlord.py">
+    <Compile Include="overlord.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="overlord\__init__.py" />
   </ItemGroup>
   <ItemGroup>
-    <Folder Include="drone\" />
-    <Folder Include="drone\Volatile\" />
-    <Folder Include="drone\Volatile\TestTask\" />
-    <Folder Include="overlord\" />
+    <Folder Include="Volatile\" />
+    <Folder Include="Volatile\TestTask\" />
   </ItemGroup>
   <PropertyGroup>
     <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">10.0</VisualStudioVersion>
