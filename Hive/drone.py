@@ -1,28 +1,12 @@
 ﻿from threading import Thread, Condition, RLock, Lock
-from collections import namedtuple
-from os import getcwd
+from pathlib import Path
+
 import runpy
 import queue
-#import asyncio
 
-#package imports
 import tasksupport
 import hivenode
-#
 
-# test
-runpy.run_path(getcwd()+r"\Volatile\TestTask\vector_mult.py")
-#
-
-AwaitedTask = namedtuple('AwaitedTask', ['task', 'condition'])
-ServerInfo = namedtuple('ServerInfo', ['address',
-                                       'predecessor',
-                                       'successor',
-                                       'connected',
-                                       'lock',
-                                       'enter_address',
-                                       'hello', 'hello_condition'
-                                       'register_condition'])
 
 class Drone(hivenode.HiveNode):
     
@@ -40,8 +24,6 @@ class Drone(hivenode.HiveNode):
         self._exec_task_queue = queue.Queue()
         self._exec_lock = Condition()
 
-        tasksupport._drone = self
-
         self._drone_name = None
 
         self._register_server()
@@ -49,31 +31,32 @@ class Drone(hivenode.HiveNode):
         self._hello = None
         self._register = None
 
-        self.server = ServerInfo(None, None, None, False,
-                                 RLock(), server_addr,
-                                 None, Condition(),
-                                 Condition())
+        self.server = hivenode.ServerInfo(server_addr)
 
-
+        self._tasks = {}
 
     def _register_server(self):
         super().rpc_server.register_function(self.Hive_PutTask)
         super().rpc_server.register_function(self.Hive_Hello)
         super().rpc_server.register_function(self.Hive_TaskResult)
-        
 
     #RPC my end
 
     def Hive_PutTask(self, a, t) -> NoneType:
-        pass
+        
+        def put():
+            with self._exec_lock:
+                self._exec_task_queue.put(hivenode.Task(**t))
+                self._exec_lock.notify()
+        
+        Thread(target= put, daemon= True).start()
 
     def Hive_Hello(self, a : (str, int), server: (str, int)) -> NoneType:
 
         def hello():
             with self.server.hello_condition:
                 if not self.server.hello:
-                    self.server._replace(hello= server)
-
+                    self.server.hello = server
                     self.server.hello_condition.notify()
 
         Thread(target= hello, daemon= True).start()
@@ -83,9 +66,9 @@ class Drone(hivenode.HiveNode):
         def register():
             with self.server.register_condition:
                 if not self.server.address:
-                    self.server._replace(address= a)
-                    self.server._replace(predecessor= p)
-                    self.server._replace(successor= s)
+                    self.server.address = a
+                    self.server.predecessor = p
+                    self.server.successor = s
 
                     if not self._drone_name:
                         self._drone_name = name
@@ -99,33 +82,32 @@ class Drone(hivenode.HiveNode):
         def task_result_worker():
 
             with self._task_awaited_lock:
-                if not (task_id in self._task_awaited):
+                if not (t_id in self._task_awaited):
                     return
                 
-                task = self._task_awaited[task_id]
+                task = self._task_awaited[t_id]
 
                 with task.condition:
-                    task.task.finalize(data)
+                    task.task.result = d
+                    task.task.done = True
                     task.condition.notify()
                      
-        Thread(target = task_result_worker).start()
+        Thread(target= task_result_worker, daemon= True).start()
 
 
     #RPC target end
 
-    def _Hive_overlord_PutTask(server, t) -> NoneType:
-        super().get_proxy(server).Hive_PutTask(t)
-        pass
+    def _Hive_overlord_PutTask(self, t) -> NoneType:
+        self.get_server_proxy().Hive_PutTask(t)
 
-    def _Hive_overlord_GetTask() -> NoneType:
-        pass   
+    def _Hive_overlord_GetTask(self) -> NoneType:
+        self.get_server_proxy().Hive_GetTask()   
 
-    def _Hive_drone_TaskResult(owner, t_id : int, d : str) -> NoneType:
+    def _Hive_drone_TaskResult(self, owner, t_id : int, d : str) -> NoneType:
         try:
-            d = super().get_proxy(owner)
+            d = self.get_proxy(owner)
             d.Hive_TaskResult(taskid, result)
         finally:
-            #TODO: reliability
             print("error debug!!")
 
     #methods
@@ -148,18 +130,18 @@ class Drone(hivenode.HiveNode):
                         counter = self.max_attempts
                     except:
                         if self.server.enter_address:
-                            self.server._replace(enter_address = None)
+                            self.server.enter_address = None
                         else:
                             stage = 0
 
                 if stage == 2:
-                    self.server._replace(hello= None)
+                    self.server.hello = None
                     waittime = self.time_to_wait*(self.max_attempts - counter - 1)
                     try:
                         proxy.Hive_Hello()
                         with self.server.hello_condition:
                             stage = 3
-                            self.server.hello_condition.wait(waittime) #make sure that this does not returns inmediately
+                            self.server.hello_condition.wait(waittime)
                             if not self.server.hello:
                                 stage = 2
                                 counter -= 1
@@ -174,9 +156,9 @@ class Drone(hivenode.HiveNode):
                             stage = 1
                 
                 if stage == 4:
-                    self.server._replace(address= None)
-                    self.server._replace(predecessor= None)
-                    self.server._replace(successor= None)
+                    self.server.address = None
+                    self.server.predecessor = None
+                    self.server.successor = None
                     waittime = self.time_to_wait*(self.max_attempts - counter - 1)
                     try:
                         proxy.Hive_Register()
@@ -207,31 +189,49 @@ class Drone(hivenode.HiveNode):
                                 server = None
                                 stage = 2
             
+            self.server.connected = True
+
             return server
 
     def start_work(self):
 
+        from time import sleep
+
         def taskthread(task):
-            self._exec_lock.acquire()
-            tasksupport.CurrentTask = task
+            with self._exec_lock:
+                tasksupport.TaskData.drone = self
+                tasksupport.TaskData.task = task
 
-            #TODO: put the actual path here
-            runpy.run_path(task.name)
-            if not task.done:
-                print("task ", task.name, " exit without a result")
+                with self._task_count_lock:
+                    self._task_count += 1
+                    t_id = self._task_count
+
+                p = Path("./Volatile/{0}".format(t_id))
+                if not p.exists():
+                    p.mkdir(parents= True)
+
+                for d in task._dependencies:
+                    q = p / (d[0] + ".py")
+                    with q.open(mode= 'w') as f:
+                        f.write(d[1].code)
+                        
+                    d[1].path = str(q)
+
+                runpy.run_path(task._dependencies[task.name].path)               
                       
-            self._Hive_drone_TaskResult(task.owner, task.task_id, task.result)
+                self._Hive_drone_TaskResult(task.owner, task.task_id, task.result)
 
-            tasksupport.CurrentTask = None
-            self._exec_lock.release()
+                tasksupport.TaskData.task = None
 
         def workloop():
             while True:
                 with self._exec_lock:
-                    self._Hive_overlord_GetTask(super().find_my_ip())
+                    self._Hive_overlord_GetTask()
                     while self._exec_task_queue.qsize() == 0:
                         self._exec_lock.wait()
-                    Thread(target = taskthread, args =(self._exec_task_queue.get(),)).start()              
+                    Thread(target = taskthread, args =(self._exec_task_queue.get(),)).start()
+                
+                sleep(0.5)
 
         self._work_thread = Thread(target = workloop)
         self._work_thread.start()
@@ -253,13 +253,32 @@ class Drone(hivenode.HiveNode):
                 del self._task_awaited[task_id]           
             return task.task.resutl
 
-    def addtask(self, task : str, data : str,  dependencies : list = None) -> bool:
+    def addtask(self, task : str, data : str,  dependencies : list = None, parent_id = None):
         with self._task_count_lock:
             self._task_count += 1
             t_id = self._task_count
-
-        a = AwaitedTask(tasksupport.Task(task, data, owneraddr = self.rpc_listen_point, taskid = t_id), Condition())
+        
         with self._task_awaited_lock:
+            dep = self._task_awaited[parent_id]._dependencies if parent_id else self._tasks
+            p = {d: dep[d] for d in dependencies}
+            p.update({task: dep[task]})
+
+            t = hivenode.Task(name= task, data= data, id = t_id, dependencies= p)
+            a = hivenode.AwaitedTask(t, Condition())
             self._task_awaited[t_id] = a
 
-        return True
+        i = 0
+        while i < self.max_attempts:
+            try:
+                self._Hive_overlord_PutTask(t)
+                return t_id
+            except:
+                i += 1
+
+    def loadtask(self, path):
+        
+        with open(path) as f:
+            code = f.read()
+
+        dep = hivenode.Dependency(code, path)
+        self._tasks.update({Path(path).name: dep})
