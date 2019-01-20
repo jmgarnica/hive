@@ -22,6 +22,8 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="a.py" />
+    <Compile Include="b.py" />
     <Compile Include="drone.py">
       <SubType>Code</SubType>
     </Compile>
@@ -32,7 +34,7 @@
     <Compile Include="tasksupport.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Volatile\TestTask\vector_mult.py">
+    <Compile Include="TestTask\vector_mult.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="hivenode.py">
@@ -44,7 +46,10 @@
   </ItemGroup>
   <ItemGroup>
     <Folder Include="Volatile\" />
-    <Folder Include="Volatile\TestTask\" />
+    <Folder Include="TestTask\" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="TestTask\vector_mult_test_data.txt" />
   </ItemGroup>
   <PropertyGroup>
     <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">10.0</VisualStudioVersion>

@@ -1,26 +1,48 @@
 ﻿import rpcserver
+import socket
 from threading import Thread, RLock, Condition
-from struct import pack, unpack
+from struct import pack, unpack, error
 from collections import namedtuple
 
 class HiveNode:
     
     max_attempts = 10
-    time_to_wait = 0.5
+    time_to_wait = 0.1
 
-    def __init__(self, rpc_port : int, broadcastport : int):
+    def __init__(self, rpc_port : int, broadcast_port : int, propagation_port : int = None, auto_propagation = True):
+
         self.rpc_server = rpcserver.HiveXMLRPCServer(("localhost", rpc_port))
         self.rpc_server.register_function(self.Hive_node_test)
+        self.rpc_server_at = rpc_port
 
         self._rpc_thread = Thread(target = self.rpc_server.serve_forever)
         self._rpc_thread.start()
 
-        self.broadcastport = broadcastport
+        self.broadcast_port = broadcast_port
+        self.auto_propagation = auto_propagation
+        self.propagation_port = propagation_port if propagation_port else broadcast_port
+        self._current_serv = (None, None, None)
+
         self.udp_server = None
         self._udp_server_thread = None
+        
+        self.broadcast_blacklist = set()
+        self.broadcast_blacklist_cond = Condition()
+        self.clear_blacklist_start()
 
-    def Hive_node_test(self):
+    def clear_blacklist_start(self):
 
+        def clear():
+            while True:
+                with self.broadcast_blacklist_cond:
+                    if not self.broadcast_blacklist_cond.wait(HiveNode.time_to_wait*20):
+                        print("cleaning")
+                        self.broadcast_blacklist.clear()
+
+        Thread(target= clear, daemon= True).start()
+
+    def Hive_node_test(self, a):
+        print("{0} -> Node Test".format(a))
         return "ACK"
 
     def propagate_address(self, addr):
@@ -33,51 +55,105 @@ class HiveNode:
             self.udp_server.shutdown()
             self.udp_server = None
 
-        self.udp_server = rpcserver.UDPServer(("localhost", self.broadcastport), rpcserver.PropagationHandler)
+        self.udp_server = rpcserver.UDPServer(("localhost", self.propagation_port), rpcserver.PropagationHandler)
         Thread(target = propagation, daemon = True).start()
 
     def _locate_server(self):
         HOST = '<broadcast>'
-        PORT = self.broadcastport
+        PORT = self.broadcast_port
         ADDR = HOST,PORT
         BUFSIZ = 100
-
-        if self.udp_server != None:
-            self.udp_server.shutdown()
-            self.udp_server = None
 
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(self.time_to_wait)
         s.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
-        for x in range(self.max_attempts): 
-            s.sendto('heeelp i need a server',ADDR)
-            try:
-                data, naddr = s.recvfrom(BUFSIZ)
-                i = unpack('<i', data[:4])[0]
-                self._current_serv = unpack('<{0}si'.format(i[0]),data[4:8+i])
-            except socket.timeout:
-                pass
 
-    def get_proxy(self, target : (str, int) = None):
+        self_message = True
+        k = 0
+        while k < self.max_attempts:
+
+            s.sendto('hive server location'.encode(),ADDR)
+            if self_message:
+                s.sendto('hive server location'.encode(), 0, ("127.0.0.1", PORT))
+
+            try:
+                j = 0
+                with self.broadcast_blacklist_cond:
+                    n = len(self.broadcast_blacklist) + 1
+
+                while j < n:
+                    data, naddr = s.recvfrom(BUFSIZ)
+
+                    with self.broadcast_blacklist_cond:
+                        if naddr not in self.broadcast_blacklist:
+                            break
+                    
+                    j += 1
+
+                try:
+                    i = unpack('<i', data[:4])[0]
+
+                    try:
+                        self._current_serv = unpack('<{0}si'.format(i),data[4:8+i])
+                        self._current_serv = (self._current_serv[0].decode(), self._current_serv[1], naddr)
+                        return
+
+                    except error:
+                        self._current_serv = (naddr[0], i, naddr)
+                        return
+
+                except error:
+                    with self.broadcast_blacklist_cond:
+                        self.broadcast_blacklist.add(naddr)
+                    
+
+            except socket.timeout as to:
+                print(to)
+
+            except OSError as o:
+                print(o)
+                self_message = False
+
+            k += 1
+
+        self._current_serv = (None, None, None)
+
+    def get_proxy(self, target : (str, int) = None, owntest = False):
         if not target:
-            if self._current_serv:
-                target = self._try_connect(self._current_serv)
+            if self._current_serv[0]:
+                target = self._try_connect(self._current_serv[:2], owntest)
                 if target:
                     return target
-            self._locate_server() #TODO: make a ban list for bad broadcast responses
-            target = self._try_connect(self._current_serv)
-            if target:
-                self.propagate_address(self._current_serv)
-                return target
 
+            i = 0
+            while i < HiveNode.max_attempts:
+                print("locate server ", i)
+                self._locate_server()
+
+                if self._current_serv[0]:
+                    target = self._try_connect(self._current_serv[:2], owntest, False)
+                    if target:
+
+                        with self.broadcast_blacklist_cond:
+                            self.broadcast_blacklist_cond.notify()
+
+                        if self.auto_propagation:
+                            self.propagate_address(self._current_serv[:2])
+                        return target
+                    else:
+                        with self.broadcast_blacklist_cond:
+                            self.broadcast_blacklist.add(self._current_serv[2])
+                        self._current_serv = (None, None, None)
+
+                i += 1
         else:
-            target = self._try_connect(target)
+            target = self._try_connect(target, owntest)
             if target:
                 return target
 
         raise Exception
 
-    def _test_connection(self, proxy):
+    def _test_connection(self, proxy, paddr):
         try:
             result = proxy.Hive_node_test()
             if result == "ACK":
@@ -85,31 +161,38 @@ class HiveNode:
             
             return False
 
-        except:
+        except Exception as e:
+            print(e)
             return False
 
-    def _try_connect(self, addr):
-        for x in range(self.max_attempts):
+    def _try_connect(self, addr, owntest, repeat = True):
+        for x in range(self.max_attempts if repeat else 1):
             try:
-                client = xmlrpc.client.ServerProxy("http://{0}:{0}".format(addr[0], addr[1]))
-                if self.test_connection(client):
+                client = rpcserver.ServerProxyHiveWrapper(addr, self.rpc_server_at)
+                if self._test_connection(client, addr if owntest else None):
                     return client
-            except:
-                pass
+            except Exception as e:
+                print(e)
 
     def set_current_server(self, addr):
-        self._current_serv = addr
+        self._current_serv = (*addr, None)
+
+        if not self.auto_propagation:
+            return
+
         if addr:
-            if self._try_connect(addr):
+            if self._try_connect(addr, False):
                 self.propagate_address(addr)
         elif self.udp_server != None:
             self.udp_server.shutdown()
             self.udp_server = None
 
+
+            
 class Task:
     """
         keyargs:
-        [R]name / _name                    str                 the name of the tast, must be include in the dependencies dict
+        [R]name / _name                    str                 the name of the tast, must be a key in the dependencies dict
         [R]data / _data                    str                 serialized data to start the task
         [ ]owner / _owner                  (str, int)          IP direction of HIVE-RPC server awaiting the result
         [R]id / _id                        int                 the id of the task in the process where it comes from

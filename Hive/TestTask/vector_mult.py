@@ -12,15 +12,14 @@ def vector_deserializer(vector : str) -> (int, list, list):
            [int(i) for i in vector[1].split()],
            [int(i) for i in vector[2].split()])
 
-split_threshold, vector_a, vector_b = vector_deserializer(tasksupport.CurrentTask.data)
+split_threshold, vector_a, vector_b = vector_deserializer(tasksupport.TaskData.task.data)
 
 if len(vector_a) != len(vector_b):
     raise Exception("vectors length mismatch")
 
-@asyncio.coroutine
-def vector_mult(v_a : list, v_b : list) -> list:
+async def vector_mult(v_a : list, v_b : list) -> list:
     if len(v_a) > split_threshold:
-        name = tasksupport.CurrentTask.name
+        name = tasksupport.TaskData.task.name
         split = len(v_a)//2
 
         data = vector_serializer(split_threshold, v_a[:split], v_b[:split])
@@ -29,14 +28,15 @@ def vector_mult(v_a : list, v_b : list) -> list:
         data = vector_serializer(split_threshold, v_a[split:], v_b[split:])
         task2 = tasksupport.distributed_process(name, data)
 
-        return (yield from task1) + (yield from task2)
+        return (await task1) + (await task2)
 
     return [v_a[i]*v_b[i] for i in range(len(v_a))]
 
-@asyncio.coroutine
-def task():
-    tasksupport.CurrentTask.finalize((yield from vector_mult(vector_a, vector_b)))
-    print("finalized task: ", tasksupport.CurrentTask.task_id)
+
+async def task():
+    tasksupport.TaskData.task.result = await vector_mult(vector_a, vector_b)
+    print("finalized task: ", tasksupport.TaskData.task.task_id)
+    print("result :", tasksupport.TaskData.task.result)
 
 loop = asyncio.get_event_loop()
 
@@ -44,7 +44,7 @@ try:
     loop.run_until_complete(task())
 
 except:
-    print("!error task: ",tasksupport.CurrentTask.task_id)
+    print("!error task: ", tasksupport.TaskData.task.task_id)
 
 finally:
     loop.close()
