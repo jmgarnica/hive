@@ -1,4 +1,4 @@
-# Hive
+# Hive (University project)
 Distributed system for parallelization of tasks
 
 ## Description
